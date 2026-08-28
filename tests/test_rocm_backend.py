@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from backend.rocm import ROCmBackend
 from paths import SMOKE_VECTOR_ADD
-from paths import SMOKE_VECTOR_ADD, SOFTMAX_CUDA
+from paths import SMOKE_VECTOR_ADD, SOFTMAX_CUDA , SOFTMAX_HIP_BASELINE
 
 
 def test_compile_builds_correct_hipcc_command():
@@ -66,3 +66,23 @@ def test_smoke_kernel_source_exists():
 
 def test_softmax_cuda_source_exists():
     assert SOFTMAX_CUDA.is_file()
+
+def test_softmax_hip_baseline_exists():
+    """HIPIFY output, checked in. This is the baseline the agent competes against."""
+    assert SOFTMAX_HIP_BASELINE.is_file()
+
+
+def test_hipify_translation_left_kernel_body_untouched():
+    """The baseline is fair only if translation was purely mechanical.
+    If the reduction ever differs between the CUDA and HIP sources, the
+    comparison is no longer apples-to-apples."""
+    cuda = SOFTMAX_CUDA.read_text()
+    hip = SOFTMAX_HIP_BASELINE.read_text()
+
+    kernel_start = "__global__ void softmax_rows"
+    kernel_end = "// Host reference"
+
+    cuda_kernel = cuda[cuda.index(kernel_start):cuda.index(kernel_end)]
+    hip_kernel = hip[hip.index(kernel_start):hip.index(kernel_end)]
+
+    assert cuda_kernel == hip_kernel

@@ -7,3 +7,4 @@ BUILD_DIR = REPO_ROOT / "build"
 
 SMOKE_VECTOR_ADD = KERNELS_DIR / "smoke" / "vector_add.hip.cpp"
 SOFTMAX_CUDA = KERNELS_DIR / "softmax" / "softmax.cu"
+SOFTMAX_HIP_BASELINE = KERNELS_DIR / "softmax" / "softmax_baseline.hip.cpp"
