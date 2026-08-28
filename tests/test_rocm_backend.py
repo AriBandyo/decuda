@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from backend.rocm import ROCmBackend
 from paths import SMOKE_VECTOR_ADD
+from paths import SMOKE_VECTOR_ADD, SOFTMAX_CUDA
 
 
 def test_compile_builds_correct_hipcc_command():
@@ -61,3 +62,7 @@ def test_run_preserves_stdout_when_kernel_reports_wrong_answer():
 def test_smoke_kernel_source_exists():
     """Unmocked. Catches the kernel being moved or renamed out from under us."""
     assert SMOKE_VECTOR_ADD.is_file()
+
+
+def test_softmax_cuda_source_exists():
+    assert SOFTMAX_CUDA.is_file()
