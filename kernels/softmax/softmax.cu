@@ -149,9 +149,35 @@ int main() {
   CUDA_CHECK(cudaFree(d_in));
   CUDA_CHECK(cudaFree(d_out));
 
+  // Evidence for the referee. Row sums feed the property check; the scattered
+  // sample catches errors that preserve sums but relocate values.
+  // Stride is prime so the sample walks across columns rather than hitting
+  // the same column of every row.
+  const int SAMPLE_STRIDE = 7919;
+
   std::printf("{\"kernel\":\"softmax\",\"correct\":%s,"
-              "\"rows\":%d,\"cols\":%d,\"max_abs_err\":%.3e}\n",
+              "\"rows\":%d,\"cols\":%d,\"max_abs_err\":%.3e",
               correct ? "true" : "false", rows, cols, max_abs_err);
+
+  std::printf(",\"row_sums\":[");
+  for (int r = 0; r < rows; ++r) {
+    double s = 0.0;
+    for (int c = 0; c < cols; ++c) {
+      s += static_cast<double>(h_out[static_cast<size_t>(r) * cols + c]);
+    }
+    std::printf("%s%.9f", r ? "," : "", s);
+  }
+  std::printf("]");
+
+  std::printf(",\"output\":[");
+  bool first = true;
+  for (size_t i = 0; i < n; i += SAMPLE_STRIDE) {
+    std::printf("%s%.9e", first ? "" : ",", h_out[i]);
+    first = false;
+  }
+  std::printf("]");
+
+  std::printf(",\"sample_stride\":%d}\n", SAMPLE_STRIDE);
 
   return correct ? 0 : 2;
 }
