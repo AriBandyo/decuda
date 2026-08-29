@@ -39,7 +39,8 @@ class EnvironmentRecord:
     device_name: str
     rocm_version: str
     hostname: str
-
+    peak_bandwidth_gb_s: float = 0.0 # 0 = unknown; bandwidth check is skipped
+    # peak_bandwidth_gbs_s is the only refree check that can call a result impossible rather than merely being suspicicous and this is the deciding thing that helps this project 
 
 @dataclass(frozen=True)
 class Evidence:
