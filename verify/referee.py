@@ -39,7 +39,7 @@ class CorrectnessReferee:
         self.tolerance = tolerance
         self.row_sum_tolerance = row_sum_tolerance
 
-    def adjudicate(self, evidence: Evidence, cols: int | None = None) -> Verdict:
+    def adjudicate(self, evidence: Evidence) -> Verdict:
         checks: list[CheckResult] = []
 
         checks.append(self._check_execution(evidence))
@@ -52,8 +52,8 @@ class CorrectnessReferee:
         if all(c.passed for c in checks):
             checks.append(self._check_magnitude(evidence))
 
-        if cols is not None and all(c.passed for c in checks):
-            checks.append(self._check_row_sums(evidence, cols))
+        if all(c.passed for c in checks):
+            checks.append(self._check_row_sums(evidence))
 
         return Verdict(accepted=all(c.passed for c in checks), checks=checks)
 
@@ -105,26 +105,28 @@ class CorrectnessReferee:
             )
         return CheckResult("magnitude", True, f"max abs error {worst:.3e}")
 
-    def _check_row_sums(self, ev: Evidence, cols: int) -> CheckResult:
+    def _check_row_sums(self, ev: Evidence) -> CheckResult:
         """Property check. Softmax rows sum to 1 by definition.
 
-        Catches candidates that are element-wise close but structurally wrong --
-        e.g. one that skipped normalization. Element-wise comparison is what a
-        self-grading agent would do; property checking is what an independent
-        referee does.
+        Reads sums the kernel computed over the FULL matrix, not sums derived
+        from the sparse output sample -- a sample cannot be sliced into rows,
+        and deriving them from one would check a different claim than the one
+        being made.
         """
-        out = ev.candidate_output
-        if cols <= 0 or len(out) % cols != 0:
-            return CheckResult("row_sums", False, f"output length {len(out)} not divisible by cols {cols}")
+        sums = ev.candidate_row_sums
+        if not sums:
+            return CheckResult(
+                "row_sums", False,
+                "candidate emitted no row_sums -- absent evidence is not "
+                "passing evidence",
+            )
 
-        for r in range(len(out) // cols):
-            s = math.fsum(out[r * cols:(r + 1) * cols])
+        for r, s in enumerate(sums):
             if abs(s - 1.0) > self.row_sum_tolerance:
                 return CheckResult(
                     "row_sums", False,
-                    f"row {r} sums to {s:.6f}, not 1.0 -- output is not a "
+                    f"row {r} sums to {s:.9f}, not 1.0 -- output is not a "
                     f"probability distribution",
                 )
-        return CheckResult("row_sums", True, "all rows sum to 1.0")    
-
+        return CheckResult("row_sums", True, f"all {len(sums)} rows sum to 1.0")
 

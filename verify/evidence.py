@@ -62,6 +62,10 @@ class Evidence:
     baseline_output: Sequence[float] = field(default_factory=list)
     candidate_output: Sequence[float] = field(default_factory=list)
 
+    baseline_row_sums: tuple[float, ...] = ()
+    candidate_row_sums: tuple[float, ...] = ()
+
     # Adversarial inputs the candidate was additionally run against,
     # keyed by case name -> flattened output.
     adversarial_outputs: dict[str, Sequence[float]] = field(default_factory=dict)
+    

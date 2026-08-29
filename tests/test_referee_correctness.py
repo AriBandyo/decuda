@@ -24,6 +24,11 @@ def _make_evidence(candidate_output, candidate_returncode=0, baseline_output=Non
             _softmax_row([1.0, 2.0, 3.0, 4.0]) + _softmax_row([0.5, 0.5, 0.5, 0.5])
         )
 
+    def _row_sums(vals):
+        return tuple(
+            math.fsum(vals[i:i + COLS]) for i in range(0, len(vals), COLS)
+        )
+
     env = EnvironmentRecord("test-device", "rocm-test", "testhost")
     ok = ExecutionRecord("baseline.hip.cpp", ("hipcc", "-O3"), 0, "", "")
     cand = ExecutionRecord("candidate.hip.cpp", ("hipcc", "-O3"),
@@ -37,10 +42,11 @@ def _make_evidence(candidate_output, candidate_returncode=0, baseline_output=Non
         candidate_execution=cand,
         baseline_timing=timing,
         candidate_timing=timing,
-        baseline_output=baseline_output,
+        baseline_output=tuple(baseline_output),
         candidate_output=tuple(candidate_output),
+        baseline_row_sums=_row_sums(list(baseline_output)),
+        candidate_row_sums=_row_sums(list(candidate_output)),
     )
-
 
 def _failed_check_names(verdict):
     return {c.name for c in verdict.failures}
@@ -49,7 +55,7 @@ def _failed_check_names(verdict):
 def test_accepts_an_honest_candidate():
     """A referee that rejects everything catches every fake and is useless."""
     ev = _make_evidence(_make_evidence(()).baseline_output)
-    verdict = CorrectnessReferee().adjudicate(ev, cols=COLS)
+    verdict = CorrectnessReferee().adjudicate(ev)
     assert verdict.accepted, verdict.feedback()
 
 
@@ -57,7 +63,7 @@ def test_rejects_truncated_output():
     """Fast because it computed fewer elements."""
     full = _make_evidence(()).baseline_output
     ev = _make_evidence(full[:COLS])
-    verdict = CorrectnessReferee().adjudicate(ev, cols=COLS)
+    verdict = CorrectnessReferee().adjudicate(ev)
     assert not verdict.accepted
     assert "shape" in _failed_check_names(verdict)
 
@@ -68,7 +74,7 @@ def test_rejects_nan_output():
     full = list(_make_evidence(()).baseline_output)
     full[3] = float("nan")
     ev = _make_evidence(full)
-    verdict = CorrectnessReferee().adjudicate(ev, cols=COLS)
+    verdict = CorrectnessReferee().adjudicate(ev)
     assert not verdict.accepted
     assert "finite" in _failed_check_names(verdict)
     assert "magnitude" not in _failed_check_names(verdict)
@@ -82,10 +88,10 @@ def test_rejects_grossly_unnormalized_output():
         m = max(row)
         unnormalized += [math.exp(v - m) for v in row]
 
-    verdict = CorrectnessReferee().adjudicate(_make_evidence(unnormalized), cols=COLS)
+    verdict = CorrectnessReferee().adjudicate(_make_evidence(unnormalized))
     assert not verdict.accepted
     assert "magnitude" in _failed_check_names(verdict)
-    
+
 def test_rejects_output_that_is_elementwise_close_but_not_a_distribution():
     """The fake that element-wise comparison cannot catch.
 
@@ -102,7 +108,7 @@ def test_rejects_output_that_is_elementwise_close_but_not_a_distribution():
     candidate = [v * scale for v in baseline]
 
     ref = CorrectnessReferee(tolerance=1e-4, row_sum_tolerance=1e-6)
-    verdict = ref.adjudicate(_make_evidence(candidate), cols=COLS)
+    verdict = ref.adjudicate(_make_evidence(candidate))
 
     # Magnitude must NOT be what catches it -- that is the whole point.
     assert "magnitude" not in _failed_check_names(verdict)
@@ -113,7 +119,7 @@ def test_rejects_candidate_that_crashed():
     """Nonzero exit is not a performance result."""
     full = _make_evidence(()).baseline_output
     ev = _make_evidence(full, candidate_returncode=139)
-    verdict = CorrectnessReferee().adjudicate(ev, cols=COLS)
+    verdict = CorrectnessReferee().adjudicate(ev)
     assert not verdict.accepted
     assert "execution" in _failed_check_names(verdict)
 
@@ -122,6 +128,6 @@ def test_feedback_names_the_failing_check():
     """Rejections must be actionable -- at step 10 this text is what the
     agent gets back."""
     ev = _make_evidence(_make_evidence(()).baseline_output[:COLS])
-    verdict = CorrectnessReferee().adjudicate(ev, cols=COLS)
+    verdict = CorrectnessReferee().adjudicate(ev)
     assert "REJECTED" in verdict.feedback()
     assert "shape" in verdict.feedback()

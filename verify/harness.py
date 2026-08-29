@@ -60,6 +60,8 @@ class Harness:
                 tuple(candidate_times), self.warmup, len(candidate_times)),
             baseline_output=self._parse_output(baseline_exec.stdout),
             candidate_output=self._parse_output(candidate_exec.stdout),
+            baseline_row_sums=self._parse_row_sums(baseline_exec.stdout),
+            candidate_row_sums=self._parse_row_sums(candidate_exec.stdout),
         )
 
     def _execute_once(self, source: Path, binary: Path) -> ExecutionRecord:
@@ -112,6 +114,16 @@ class Harness:
         except (json.JSONDecodeError, IndexError):
             return ()
         values = payload.get("output")
+        if not isinstance(values, list):
+            return ()
+        return tuple(float(v) for v in values)
+    @staticmethod
+    def _parse_row_sums(stdout: str) -> tuple[float, ...]:
+        try:
+            payload = json.loads(stdout.strip().splitlines()[-1])
+        except (json.JSONDecodeError, IndexError):
+            return ()
+        values = payload.get("row_sums")
         if not isinstance(values, list):
             return ()
         return tuple(float(v) for v in values)
