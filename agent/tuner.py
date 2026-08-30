@@ -81,7 +81,7 @@ class TunerAgent:
 
         body = _json.dumps({
             "model": self.model,
-            "max_tokens": 8000,
+            "max_tokens": 16000,
             "system": SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": prompt}],
         }).encode()

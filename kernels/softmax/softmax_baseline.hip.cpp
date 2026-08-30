@@ -129,8 +129,28 @@ int main() {
   const int threads = THREADS_PER_BLOCK;
   const int blocks = rows;
   const size_t shmem = threads * sizeof(float);
+  hipEvent_t ev_start, ev_stop;
+  CUDA_CHECK(hipEventCreate(&ev_start));
+  CUDA_CHECK(hipEventCreate(&ev_stop));
+  // Warm up once so the timed launch does not pay one-time module load and
+  // code object setup. Without this the baseline's first launch carries costs
+  // the candidate's does not, and the comparison measures startup, not speed.
+  for (int w = 0; w < 10; ++w) {
+    softmax_rows<<<blocks, threads, shmem>>>(d_in, d_out, rows, cols);
+  }
+  CUDA_CHECK(hipDeviceSynchronize());
 
-  softmax_rows<<<blocks, threads, shmem>>>(d_in, d_out, rows, cols);
+  const int NUM_ITERS = 20;
+  CUDA_CHECK(hipEventRecord(ev_start));
+  for (int i = 0; i < NUM_ITERS; ++i) {
+    softmax_rows<<<blocks, threads, shmem>>>(d_in, d_out, rows, cols);
+  }
+  CUDA_CHECK(hipEventRecord(ev_stop));
+  CUDA_CHECK(hipEventSynchronize(ev_stop));
+  float total_ms = 0.0f;
+  CUDA_CHECK(hipEventElapsedTime(&total_ms, ev_start, ev_stop));
+  float kernel_ms = total_ms / NUM_ITERS;
+
 
   CUDA_CHECK(hipGetLastError());
   CUDA_CHECK(hipDeviceSynchronize());
@@ -177,7 +197,7 @@ int main() {
   }
   std::printf("]");
 
-  std::printf(",\"sample_stride\":%d}\n", SAMPLE_STRIDE);
+  std::printf(",\"sample_stride\":%d,\"kernel_ms\":%.6f}\n", SAMPLE_STRIDE, kernel_ms);
 
   return correct ? 0 : 2;
 }

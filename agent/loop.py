@@ -58,13 +58,20 @@ class TuningLoop:
             candidate_path = work_dir / f"{kernel_name}_candidate_{n}.hip.cpp"
             candidate_path.write_text(candidate_source)
 
-            evidence = self.harness.collect(
-                kernel_name=kernel_name,
-                baseline_source=baseline_source_path,
-                candidate_source=candidate_path,
-                build_dir=work_dir / "build",
-                **env_kwargs,
-            )
+            try:
+                evidence = self.harness.collect(
+                    kernel_name=kernel_name,
+                    baseline_source=baseline_source_path,
+                    candidate_source=candidate_path,
+                    build_dir=work_dir / "build",
+                    **env_kwargs,
+                )
+            except RuntimeError as exc:
+                history.append(Attempt(
+                    source=candidate_source,
+                    rejection=f"Candidate did not build. {exc}",
+                ))
+                continue
 
             correctness_verdict = self.correctness.adjudicate(evidence)
 

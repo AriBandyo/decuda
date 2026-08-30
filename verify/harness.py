@@ -40,7 +40,7 @@ class Harness:
         baseline_exec = self._execute_once(baseline_source, baseline_bin)
         candidate_exec = self._execute_once(candidate_source, candidate_bin)
 
-        baseline_times, candidate_times = self._time_interleaved(
+        baseline_times, candidate_times, baseline_walls, candidate_walls = self._time_interleaved(
             baseline_bin, candidate_bin
         )
 
@@ -55,9 +55,11 @@ class Harness:
             baseline_execution=baseline_exec,
             candidate_execution=candidate_exec,
             baseline_timing=TimingSample(
-                tuple(baseline_times), self.warmup, len(baseline_times)),
+                tuple(baseline_times), self.warmup, len(baseline_times),
+                wall_times_ms=tuple(baseline_walls)),
             candidate_timing=TimingSample(
-                tuple(candidate_times), self.warmup, len(candidate_times)),
+                tuple(candidate_times), self.warmup, len(candidate_times),
+                wall_times_ms=tuple(candidate_walls)),
             baseline_output=self._parse_output(baseline_exec.stdout),
             candidate_output=self._parse_output(candidate_exec.stdout),
             baseline_row_sums=self._parse_row_sums(baseline_exec.stdout),
@@ -68,7 +70,7 @@ class Harness:
         result = self.backend.run(binary)
         return ExecutionRecord(
             source_path=str(source),
-            compile_command=("hipcc", "-O3", str(source), "-o", str(binary)),
+            compile_command=("hipcc", "-O3", "--offload-arch=gfx942", str(source), "-o", str(binary)),
             returncode=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
@@ -86,13 +88,18 @@ class Harness:
             self.backend.run(candidate_bin)
 
         baseline_times, candidate_times = [], []
+        baseline_walls, candidate_walls = [], []
         for _ in range(self.iterations):
-            baseline_times.append(self._wall_time_ms(baseline_bin))
-            candidate_times.append(self._wall_time_ms(candidate_bin))
+            b_wall, b_kernel = self._wall_time_ms(baseline_bin)
+            c_wall, c_kernel = self._wall_time_ms(candidate_bin)
+            baseline_walls.append(b_wall)
+            candidate_walls.append(c_wall)
+            baseline_times.append(b_kernel if b_kernel is not None else b_wall)
+            candidate_times.append(c_kernel if c_kernel is not None else c_wall)
 
-        return baseline_times, candidate_times
+        return baseline_times, candidate_times, baseline_walls, candidate_walls
 
-    def _wall_time_ms(self, binary: Path) -> float:
+    def _wall_time_ms(self, binary: Path) -> tuple[float, float | None]:
         """Wall time around the whole process.
 
         Less precise than in-process HIP events -- process startup is included
@@ -101,8 +108,22 @@ class Harness:
         something to detect after the fact. Precision traded for integrity.
         """
         start = time.perf_counter()
-        self.backend.run(binary)
-        return (time.perf_counter() - start) * 1000.0
+        result = self.backend.run(binary)
+        wall_ms = (time.perf_counter() - start) * 1000.0
+        return wall_ms, self._parse_kernel_ms(result.stdout)
+
+    @staticmethod
+    def _parse_kernel_ms(stdout: str) -> float | None:
+        """The kernel's own report of its duration. Precise but self-reported,
+        so it is cross-checked against wall time by the referee -- a candidate
+        cannot be trusted to time itself honestly.
+        """
+        try:
+            payload = json.loads(stdout.strip().splitlines()[-1])
+        except (json.JSONDecodeError, IndexError):
+            return None
+        value = payload.get("kernel_ms")
+        return float(value) if isinstance(value, (int, float)) else None
 
     @staticmethod
     def _parse_output(stdout: str) -> tuple[float, ...]:

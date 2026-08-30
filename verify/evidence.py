@@ -31,6 +31,7 @@ class TimingSample:
     times_ms: Sequence[float]
     warmup_iterations: int
     measured_iterations: int
+    wall_times_ms: Sequence[float] = ()
 
 
 @dataclass(frozen=True)
