@@ -10,6 +10,7 @@ from backend.rocm import ROCmBackend
 
 
 from verify.record import write_run_csv
+from verify.changelog import render
 
 # softmax reads the input once and writes the output once, at minimum.
 # 1024 * 1024 * 4 bytes, times two.
@@ -53,6 +54,17 @@ def main():
         kernel_launches_per_sample=20,
     )
     print(f"record written: {csv_path}")
+
+    baseline_text = Path("kernels/softmax/softmax_baseline.hip.cpp").read_text()
+    Path("runs").mkdir(exist_ok=True)
+    Path("runs/CHANGELOG.md").write_text(
+        render(result, baseline_text, kernel_name="softmax")
+    )
+
+    traj_dir = Path("runs/trajectories")
+    traj_dir.mkdir(parents=True, exist_ok=True)
+    for it in result.iterations:
+        (traj_dir / f"candidate_{it.number}.hip.cpp").write_text(it.candidate_source)
 
 if __name__ == "__main__":
     main()
