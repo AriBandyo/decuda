@@ -1,2 +1,0 @@
-"Name","Calls","TotalDurationNs","AverageNs","Percentage","MinNs","MaxNs","StdDev"
-"vector_add(float const*, float const*, float*, int)",1,6375,6375.000000,100.00,6375,6375,0.00000000e+00

@@ -6,3 +6,6 @@ build/
 *.out
 *.o
 artifacts/
+10/
+*.db
+build/
