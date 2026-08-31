@@ -21,7 +21,7 @@ def write_run_csv (result, out_dir, * , kernel, device, rocm_version,arch,
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
-    path = out_dir / f" {stamp}_{kernel}_iterations.csv"
+    path = out_dir / f"{stamp}_{kernel}_iterations.csv"
 
 
     with path.open("w", newline = "")as fh:
