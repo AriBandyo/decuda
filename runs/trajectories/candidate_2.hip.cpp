@@ -17,147 +17,109 @@
   } while (0)
 
 #define THREADS_PER_BLOCK 256
-#define WAVEFRONT_SIZE 64
 
-// Wavefront-level max reduction
-__device__ __forceinline__ float wavefront_max(float val) {
-    val = __builtin_amdgcn_ds_swizzle(val, 0x8000 | (1 << 10) | 0); // not available, use shfl
-    // Use shuffle-based reduction for wavefront of 64
-    for (int offset = WAVEFRONT_SIZE / 2; offset > 0; offset >>= 1) {
-        float other = __shfl_xor(val, offset, WAVEFRONT_SIZE);
-        val = fmaxf(val, other);
-    }
-    return val;
-}
-
-// Wavefront-level sum reduction
-__device__ __forceinline__ float wavefront_sum(float val) {
-    for (int offset = WAVEFRONT_SIZE / 2; offset > 0; offset >>= 1) {
-        val += __shfl_xor(val, offset, WAVEFRONT_SIZE);
-    }
-    return val;
-}
-
-// Optimized softmax: one block per row
-// Uses online softmax (single pass for max+sum) + vectorized loads
-// Block size must be multiple of WAVEFRONT_SIZE (64)
+// Online softmax: single pass for max+sum, one pass for normalize.
+// This reduces global memory reads from 3 passes to 2 passes.
+// Uses float4 vectorized loads for better memory throughput.
 __global__ void softmax_rows(const float* __restrict__ in,
                              float* __restrict__ out,
                              int rows, int cols) {
-    // LDS for cross-wavefront reductions
-    __shared__ float smax[THREADS_PER_BLOCK / WAVEFRONT_SIZE];
-    __shared__ float ssum[THREADS_PER_BLOCK / WAVEFRONT_SIZE];
+  extern __shared__ float sdata[];
 
-    const int row = blockIdx.x;
-    const int tid = threadIdx.x;
-    const int wid = tid / WAVEFRONT_SIZE;   // wavefront index
-    const int lane = tid % WAVEFRONT_SIZE;  // lane within wavefront
-    const int num_wavefronts = blockDim.x / WAVEFRONT_SIZE;
+  const int row = blockIdx.x;
+  const int tid = threadIdx.x;
+  const int bdim = blockDim.x;
+  if (row >= rows) return;
 
-    if (row >= rows) return;
+  const float* row_in  = in  + static_cast<size_t>(row) * cols;
+  float*       row_out = out + static_cast<size_t>(row) * cols;
 
-    const float* row_in  = in  + static_cast<size_t>(row) * cols;
-    float*       row_out = out + static_cast<size_t>(row) * cols;
+  // Online softmax: compute max and sum in one pass using the
+  // Milakov & Gimelshein algorithm.
+  // local_m = running max, local_s = running sum adjusted for max
+  float local_m = -INFINITY;
+  float local_s = 0.0f;
 
-    // Pass 1: Online softmax - compute max and sum in one pass
-    float local_max = -INFINITY;
-    float local_sum = 0.0f;
+  // Vectorized load with float4 where possible
+  const int cols4 = cols / 4;
+  const float4* row_in4 = reinterpret_cast<const float4*>(row_in);
 
-    // Use float4 loads where possible
-    int i = tid;
-    // Process float4 chunks
-    const int cols4 = (cols / 4) * 4;
-    const float4* row_in4 = reinterpret_cast<const float4*>(row_in);
-    int tid4 = tid;
-    int cols_div4 = cols / 4;
-    
-    for (int j = tid4; j < cols_div4; j += blockDim.x) {
-        float4 v = row_in4[j];
-        // Update running max and sum with online algorithm
-        float m_new = fmaxf(local_max, fmaxf(fmaxf(v.x, v.y), fmaxf(v.z, v.w)));
-        if (m_new != local_max) {
-            local_sum = local_sum * expf(local_max - m_new) + 
-                        expf(v.x - m_new) + expf(v.y - m_new) + 
-                        expf(v.z - m_new) + expf(v.w - m_new);
-        } else {
-            local_sum += expf(v.x - m_new) + expf(v.y - m_new) + 
-                         expf(v.z - m_new) + expf(v.w - m_new);
-        }
-        local_max = m_new;
-    }
-    // Handle remainder
-    for (int j = cols4 + tid; j < cols; j += blockDim.x) {
-        float val = row_in[j];
-        float m_new = fmaxf(local_max, val);
-        if (m_new != local_max) {
-            local_sum = local_sum * expf(local_max - m_new) + expf(val - m_new);
-        } else {
-            local_sum += expf(val - m_new);
-        }
-        local_max = m_new;
-    }
+  for (int i = tid; i < cols4; i += bdim) {
+    float4 v = row_in4[i];
+    // Process each element with online update
+    float new_m = fmaxf(local_m, v.x);
+    local_s = local_s * expf(local_m - new_m) + expf(v.x - new_m);
+    local_m = new_m;
 
-    // Wavefront-level reduction for online softmax
-    // Need to combine (max, sum) pairs across wavefront
-    for (int offset = WAVEFRONT_SIZE / 2; offset > 0; offset >>= 1) {
-        float other_max = __shfl_xor(local_max, offset, WAVEFRONT_SIZE);
-        float other_sum = __shfl_xor(local_sum, offset, WAVEFRONT_SIZE);
-        if (other_max > local_max) {
-            local_sum = local_sum * expf(local_max - other_max) + other_sum;
-            local_max = other_max;
-        } else {
-            local_sum = local_sum + other_sum * expf(other_max - local_max);
-        }
-    }
+    new_m = fmaxf(local_m, v.y);
+    local_s = local_s * expf(local_m - new_m) + expf(v.y - new_m);
+    local_m = new_m;
 
-    // Store wavefront results to LDS
-    if (lane == 0) {
-        smax[wid] = local_max;
-        ssum[wid] = local_sum;
+    new_m = fmaxf(local_m, v.z);
+    local_s = local_s * expf(local_m - new_m) + expf(v.z - new_m);
+    local_m = new_m;
+
+    new_m = fmaxf(local_m, v.w);
+    local_s = local_s * expf(local_m - new_m) + expf(v.w - new_m);
+    local_m = new_m;
+  }
+
+  // Handle remaining elements
+  for (int i = cols4 * 4 + tid; i < cols; i += bdim) {
+    float v = row_in[i];
+    float new_m = fmaxf(local_m, v);
+    local_s = local_s * expf(local_m - new_m) + expf(v - new_m);
+    local_m = new_m;
+  }
+
+  // Store both max and sum in shared memory for reduction
+  // Use two arrays: sdata[0..bdim-1] for max, sdata[bdim..2*bdim-1] for sum
+  float* smax = sdata;
+  float* ssum = sdata + bdim;
+
+  smax[tid] = local_m;
+  ssum[tid] = local_s;
+  __syncthreads();
+
+  // Reduce to find global max and sum using online algorithm
+  for (int stride = bdim / 2; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      float m_a = smax[tid];
+      float s_a = ssum[tid];
+      float m_b = smax[tid + stride];
+      float s_b = ssum[tid + stride];
+      float new_m = fmaxf(m_a, m_b);
+      float new_s = s_a * expf(m_a - new_m) + s_b * expf(m_b - new_m);
+      smax[tid] = new_m;
+      ssum[tid] = new_s;
     }
     __syncthreads();
+  }
 
-    // Final reduction across wavefronts (done by first wavefront)
-    if (wid == 0) {
-        float m = (lane < num_wavefronts) ? smax[lane] : -INFINITY;
-        float s = (lane < num_wavefronts) ? ssum[lane] : 0.0f;
-        
-        for (int offset = WAVEFRONT_SIZE / 2; offset > 0; offset >>= 1) {
-            float other_max = __shfl_xor(m, offset, WAVEFRONT_SIZE);
-            float other_sum = __shfl_xor(s, offset, WAVEFRONT_SIZE);
-            if (other_max > m) {
-                s = s * expf(m - other_max) + other_sum;
-                m = other_max;
-            } else {
-                s = s + other_sum * expf(other_max - m);
-            }
-        }
-        
-        if (lane == 0) {
-            smax[0] = m;
-            ssum[0] = s;
-        }
-    }
-    __syncthreads();
+  const float row_max = smax[0];
+  const float row_sum = ssum[0];
+  const float inv_sum = 1.0f / row_sum;
 
-    const float row_max = smax[0];
-    const float inv_sum = 1.0f / ssum[0];
+  // Pass 2: normalize using vectorized stores
+  float4* row_out4 = reinterpret_cast<float4*>(row_out);
+  for (int i = tid; i < cols4; i += bdim) {
+    float4 v = row_in4[i];
+    float4 r;
+    r.x = expf(v.x - row_max) * inv_sum;
+    r.y = expf(v.y - row_max) * inv_sum;
+    r.z = expf(v.z - row_max) * inv_sum;
+    r.w = expf(v.w - row_max) * inv_sum;
+    row_out4[i] = r;
+  }
 
-    // Pass 2: Normalize with vectorized stores
-    for (int j = tid4; j < cols_div4; j += blockDim.x) {
-        float4 v = row_in4[j];
-        float4 res;
-        res.x = expf(v.x - row_max) * inv_sum;
-        res.y = expf(v.y - row_max) * inv_sum;
-        res.z = expf(v.z - row_max) * inv_sum;
-        res.w = expf(v.w - row_max) * inv_sum;
-        reinterpret_cast<float4*>(row_out)[j] = res;
-    }
-    for (int j = cols4 + tid; j < cols; j += blockDim.x) {
-        row_out[j] = expf(row_in[j] - row_max) * inv_sum;
-    }
+  // Handle remaining elements
+  for (int i = cols4 * 4 + tid; i < cols; i += bdim) {
+    row_out[i] = expf(row_in[i] - row_max) * inv_sum;
+  }
 }
 
+// Host reference, computed in double precision so it is a stricter
+// standard than the kernel it checks.
 static void softmax_reference(const std::vector<float>& in,
                               std::vector<double>& out,
                               int rows, int cols) {
@@ -185,6 +147,7 @@ int main() {
   std::vector<float>  h_in(n), h_out(n);
   std::vector<double> h_ref(n);
 
+  // Deterministic input, fixed seed -- reruns must be comparable.
   std::srand(42);
   for (size_t i = 0; i < n; ++i) {
     h_in[i] = static_cast<float>(std::rand()) / RAND_MAX * 10.0f - 5.0f;
@@ -199,8 +162,8 @@ int main() {
 
   const int threads = THREADS_PER_BLOCK;
   const int blocks = rows;
-  const size_t shmem = (threads / WAVEFRONT_SIZE) * 2 * sizeof(float);
-  
+  // Need 2x shared memory for both max and sum arrays
+  const size_t shmem = 2 * threads * sizeof(float);
   hipEvent_t ev_start, ev_stop;
   CUDA_CHECK(hipEventCreate(&ev_start));
   CUDA_CHECK(hipEventCreate(&ev_stop));

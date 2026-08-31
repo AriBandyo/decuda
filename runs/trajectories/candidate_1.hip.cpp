@@ -22,46 +22,48 @@
 #define WAVEFRONT_SIZE 64
 
 __device__ __forceinline__ float warp_reduce_max(float val) {
-    for (int offset = WAVEFRONT_SIZE / 2; offset > 0; offset >>= 1) {
-        val = fmaxf(val, __shfl_down(val, offset));
-    }
+    // Full wavefront reduction (64 lanes on CDNA3)
+    val = fmaxf(val, __shfl_xor(val, 32));
+    val = fmaxf(val, __shfl_xor(val, 16));
+    val = fmaxf(val, __shfl_xor(val, 8));
+    val = fmaxf(val, __shfl_xor(val, 4));
+    val = fmaxf(val, __shfl_xor(val, 2));
+    val = fmaxf(val, __shfl_xor(val, 1));
     return val;
 }
 
 __device__ __forceinline__ float warp_reduce_sum(float val) {
-    for (int offset = WAVEFRONT_SIZE / 2; offset > 0; offset >>= 1) {
-        val += __shfl_down(val, offset);
-    }
+    val += __shfl_xor(val, 32);
+    val += __shfl_xor(val, 16);
+    val += __shfl_xor(val, 8);
+    val += __shfl_xor(val, 4);
+    val += __shfl_xor(val, 2);
+    val += __shfl_xor(val, 1);
     return val;
 }
 
-// Fused single-pass online softmax kernel using Welford-style online algorithm
-// One block per row, uses wavefront-level reductions
-__global__ void softmax_rows_fused(const float* __restrict__ in,
-                                    float* __restrict__ out,
-                                    int rows, int cols) {
+// Fused online softmax: single pass over data for max+sum, then one more pass to normalize
+// Uses online algorithm (Milakov & Gimelshein) to compute max and sum in one pass
+__global__ void softmax_rows(const float* __restrict__ in,
+                             float* __restrict__ out,
+                             int rows, int cols) {
     extern __shared__ float sdata[];
 
     const int row = blockIdx.x;
     const int tid = threadIdx.x;
     const int bdim = blockDim.x;
-
+    
     if (row >= rows) return;
 
     const float* row_in  = in  + static_cast<size_t>(row) * cols;
     float*       row_out = out + static_cast<size_t>(row) * cols;
 
-    // Number of wavefronts in this block
-    const int num_warps = bdim / WAVEFRONT_SIZE;
-    const int warp_id = tid / WAVEFRONT_SIZE;
+    // Number of wavefronts per block
+    const int num_waves = bdim / WAVEFRONT_SIZE;
+    const int wave_id = tid / WAVEFRONT_SIZE;
     const int lane_id = tid % WAVEFRONT_SIZE;
 
-    // Use shared memory layout: first num_warps floats for max, next num_warps for sum
-    float* smax = sdata;
-    float* ssum = sdata + num_warps;
-
-    // Online softmax: single pass to compute max and sum simultaneously
-    // using the parallel online normalization algorithm
+    // Online softmax: compute max and sum in a single pass
     float local_max = -INFINITY;
     float local_sum = 0.0f;
 
@@ -75,54 +77,44 @@ __global__ void softmax_rows_fused(const float* __restrict__ in,
         }
     }
 
-    // Wavefront-level reduction for max and sum (online merge)
-    // We need to merge (max, sum) pairs across lanes
-    for (int offset = WAVEFRONT_SIZE / 2; offset > 0; offset >>= 1) {
-        float other_max = __shfl_down(local_max, offset);
-        float other_sum = __shfl_down(local_sum, offset);
-        if (other_max > local_max) {
-            local_sum = local_sum * expf(local_max - other_max) + other_sum;
-            local_max = other_max;
-        } else {
-            local_sum += other_sum * expf(other_max - local_max);
-        }
-    }
+    // Reduce within wavefront
+    // First reduce max, then adjust sum
+    // We need to do a combined reduction
+    // Use shared memory to combine across wavefronts
+    
+    // Each thread has (local_max, local_sum) - need to combine
+    // Store in shared memory: first half for max, second half for sum
+    float* smax = sdata;
+    float* ssum = sdata + bdim;
 
-    // Lane 0 of each warp writes to shared memory
-    if (lane_id == 0) {
-        smax[warp_id] = local_max;
-        ssum[warp_id] = local_sum;
-    }
+    smax[tid] = local_max;
+    ssum[tid] = local_sum;
     __syncthreads();
 
-    // Final reduction across warps (done by first warp)
-    if (warp_id == 0) {
-        float wmax = (lane_id < num_warps) ? smax[lane_id] : -INFINITY;
-        float wsum = (lane_id < num_warps) ? ssum[lane_id] : 0.0f;
-
-        for (int offset = WAVEFRONT_SIZE / 2; offset > 0; offset >>= 1) {
-            float other_max = __shfl_down(wmax, offset);
-            float other_sum = __shfl_down(wsum, offset);
-            if (other_max > wmax) {
-                wsum = wsum * expf(wmax - other_max) + other_sum;
-                wmax = other_max;
+    // Tree reduction combining max and sum
+    for (int stride = bdim / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            float a_max = smax[tid];
+            float b_max = smax[tid + stride];
+            float a_sum = ssum[tid];
+            float b_sum = ssum[tid + stride];
+            
+            if (a_max >= b_max) {
+                ssum[tid] = a_sum + b_sum * expf(b_max - a_max);
+                // smax[tid] stays
             } else {
-                wsum += other_sum * expf(other_max - wmax);
+                ssum[tid] = b_sum + a_sum * expf(a_max - b_max);
+                smax[tid] = b_max;
             }
         }
-
-        if (lane_id == 0) {
-            smax[0] = wmax;
-            ssum[0] = wsum;
-        }
+        __syncthreads();
     }
-    __syncthreads();
 
     const float row_max = smax[0];
     const float row_sum = ssum[0];
     const float inv_sum = 1.0f / row_sum;
 
-    // Normalize
+    // Pass 2: normalize
     for (int i = tid; i < cols; i += bdim) {
         row_out[i] = expf(row_in[i] - row_max) * inv_sum;
     }
@@ -169,23 +161,22 @@ int main() {
 
   const int threads = THREADS_PER_BLOCK;
   const int blocks = rows;
-  // Shared memory: 2 * num_warps floats (max and sum per warp)
-  const int num_warps = threads / WAVEFRONT_SIZE;
-  const size_t shmem = 2 * num_warps * sizeof(float);
-
+  // Need 2*threads floats for shared memory (max + sum arrays)
+  const size_t shmem = 2 * threads * sizeof(float);
+  
   hipEvent_t ev_start, ev_stop;
   CUDA_CHECK(hipEventCreate(&ev_start));
   CUDA_CHECK(hipEventCreate(&ev_stop));
 
   for (int w = 0; w < 10; ++w) {
-    softmax_rows_fused<<<blocks, threads, shmem>>>(d_in, d_out, rows, cols);
+    softmax_rows<<<blocks, threads, shmem>>>(d_in, d_out, rows, cols);
   }
   CUDA_CHECK(hipDeviceSynchronize());
 
   const int NUM_ITERS = 20;
   CUDA_CHECK(hipEventRecord(ev_start));
   for (int i = 0; i < NUM_ITERS; ++i) {
-    softmax_rows_fused<<<blocks, threads, shmem>>>(d_in, d_out, rows, cols);
+    softmax_rows<<<blocks, threads, shmem>>>(d_in, d_out, rows, cols);
   }
   CUDA_CHECK(hipEventRecord(ev_stop));
   CUDA_CHECK(hipEventSynchronize(ev_stop));
