@@ -18,16 +18,17 @@ One candidate passed every correctness check and was reported as 75.69x faster w
 
 The candidate had not suddenly become slower. The benchmark was wrong.
 
-The baseline and candidate were taking different timing paths, making the baseline appear roughly 41x slower than it really was.
+The baseline and candidate were taking different timing paths, making the baseline appear roughly 43x slower than it really was.
 
-That was not an isolated bug. Four separate measurement asymmetries appeared while building the system. Each one made the generated kernel look better than it actually was, and each forced us to tighten the referee and measurement harness.
+That was not an isolated bug. Five separate measurement asymmetries appeared while building the system. Each one made the generated kernel look better than it actually was, and each forced us to tighten the referee and measurement harness.
 
-| Stage                       | Reported           | After external verification     |
-| --------------------------- | ------------------ | ------------------------------- |
-| Process wall-clock timing   | nothing could pass | measuring setup, not the kernel |
-| After `hipEvent` timing     | 75.69x             | 1.75x                           |
-| After baseline warmup fix   | 1.84x              | inflated by dispatch asymmetry  |
-| After matching amortization | **1.13x**          | **1.28x**                       |
+| Stage                               | Reported           | After external verification     |
+| ----------------------------------- | ------------------ | ------------------------------- |
+| Process wall-clock timing           | nothing could pass | measuring setup, not the kernel |
+| After `hipEvent` timing             | 75.69x             | 1.75x                           |
+| After baseline warmup fix           | 1.84x              | inflated by dispatch asymmetry  |
+| After matching amortization         | **1.13x**          | **1.28x**                       |
+| After matching profiler call counts | **1.13x**          | **1.12x**                       |
 
 The final number is much smaller than the first one, but it is also much more valuable: we can defend it.
 
@@ -37,12 +38,14 @@ The shrinking number is not the system failing. It is the measurement becoming t
 
 ---
 
-## **Status:** working end-to-end on rented MI300X hardware (gfx942, ROCm 10.0).
+## Status
 
-Verified result: 1.13x speedup accepted by the referee, independently confirmed
-at 1.28x with `rocprofv3`.
+Working end-to-end on rented MI300X hardware (gfx942, ROCm 10.0).
 
-- Agent proposes HIP kernels; an independent referee decides if the speedup is real
+Verified result: 1.13x accepted by the referee, independently confirmed at 1.12x
+average-to-average and 1.14x min-to-min by `rocprofv3` over 30 calls per side.
+
+- Agent proposes HIP kernels; an independent referee rejects reductions produced by unfair measurement rather than by faster code
 - 12 referee checks — 5 correctness, 7 timing and physics
 - Agent never sees pass thresholds (enforced by test)
 - Every run emits a CSV record, a changelog, and the full agent trajectory
@@ -112,10 +115,13 @@ says physics forbids it.
 On an AMD Instinct MI300X (gfx942, ROCm 10.0), 200 samples per side, 20 kernel
 launches per sample:
 
-- baseline: **6,356 ns** (self-reported), **6,454 ns** (`rocprofv3`) — 1.5% apart
-- candidate: **5,648 ns** (self-reported), **5,051 ns** floor (`rocprofv3`)
+- baseline: **6,356 ns** (self-reported); **6,556 ns** average, **5,974 ns** min (`rocprofv3`, 30 calls)
+- candidate: **5,648 ns** (self-reported); **5,856 ns** average, **5,252 ns** min (`rocprofv3`, 30 calls)
 - **1.13x speedup, 6.1 sigma separation** by the harness
-- **1.28x** profiler-minimum to profiler-minimum
+- **1.12x** average-to-average and **1.14x** min-to-min under the profiler
+
+Both sides were profiled over the same number of calls in the same session. The
+harness figure sits inside the profiler's two ratios, within about 1%.
 
 Achieved bandwidth 1,498 GB/s, 28% of theoretical peak. The baseline is already
 memory-bound and reasonably efficient, so there is no order-of-magnitude win
@@ -127,7 +133,7 @@ itself.
 
 ---
 
-## The four measurement bugs
+## The five measurement bugs
 
 Each one made the baseline look slower than it was, and each was found by the
 external profiler rather than by the referee.
@@ -153,6 +159,16 @@ benchmarking practice — timed a loop of 20 launches and divided by 20, so
 dispatch cost amortized to nearly nothing. The baseline timed a single launch and
 ate all of it. Matching the baseline to the same 20-launch structure closed the
 gap to under 2%.
+
+**5. Unequal profiler call counts.** Found on the morning of submission, while
+setting up the demo. The 1.28x above came from comparing a baseline profiled over
+two calls against a candidate profiled over many. `MinNs` falls as call count
+rises, so the baseline's minimum never had a chance to converge and the ratio was
+inflated. Profiling both sides over 30 calls in the same session gives 1.12x
+average-to-average and 1.14x min-to-min. Same species as the other four: the two
+sides measured under conditions that differed in a way that favoured one of them.
+
+Worth being precise about what happened here: \*\*the agent never manipulated the
 
 Worth being precise about what happened here: **the agent never manipulated the
 baseline and could not have.** The baseline is a fixed file protected by a test.
@@ -250,6 +266,10 @@ still parse against later versions.
   launches per timed sample to match what the candidates chose. A candidate that
   picked a different value would silently reintroduce measurement asymmetry. The
   referee should assert both sides used the same structure.
+- **Profiler minimums are call-count sensitive.** `MinNs` falls as launches
+  accumulate, so a min-to-min comparison is only fair when both sides are
+  profiled over the same number of calls. The referee does not check this, and
+  nothing in the repro instructions enforces it.
 - **`bytes_moved` is a theoretical minimum**, so reported bandwidth is an upper
   bound — conservative in the right direction, but not measured traffic.
 - **The separation rule is deliberately strict.** It compares the improvement to
