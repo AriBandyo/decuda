@@ -19,7 +19,7 @@ FIELDS = [
 def write_run_csv (result, out_dir, * , kernel, device, rocm_version,arch,
                    peak_bandwidth_gb_s, warmup,samples_per_side, kernel_launches_per_sample):
     out_dir = Path(out_dir)
-    out_dir.mkdir(parents = True, exixst_ok= True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     path = out_dir / f" {stamp}_{kernel}_iterations.csv"
 

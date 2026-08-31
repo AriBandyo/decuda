@@ -1,0 +1,15 @@
+schema_version,harness_version,timestamp,kernel,device,rocm_version,arch,peak_bandwidth_gb_s,warmup,samples_per_side,kernel_launches_per_sample,iteration,accepted,baseline_ms,candidate_ms,speedup,correctness_passed,timing_passed,check_name,check_passed,check_detail
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,1,False,0.00635891,178.83342731500875,3.555772595466174e-05,False,,execution,False,candidate exited 2; stderr: 
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,1,False,0.00635891,178.83342731500875,3.555772595466174e-05,False,,shape,False,"candidate produced 0 elements, baseline produced 133 -- a kernel that writes less output is not faster, it is incomplete"
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,execution,True,candidate exited 0
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,shape,True,"133 elements, matches baseline"
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,finite,True,all candidate values finite
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,magnitude,True,max abs error 9.320e-10
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,row_sums,True,all 1024 rows sum to 1.0
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,sample_count,True,200 samples per side
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,plausible_duration,True,durations are plausible
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,not_degenerate,True,sample variation is plausible
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,noise_level,True,noise within limits
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,warmup,True,warmup adequate
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,bandwidth_ceiling,True,"1491.8 GB/s, 28% of peak"
+1,2026.08.30,20260831T070832Z,softmax,AMD Instinct MI300X,10.0.0,gfx942,5300.0,20,200,20,2,True,0.0063839199999999995,0.00567086,1.1257410692558094,True,True,separation,True,"1.13x speedup, 6.0 sigma separation"
