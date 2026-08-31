@@ -1,35 +1,39 @@
 # decuda
 
-An agent that ports and tunes CUDA kernels to AMD HIP, and an independent referee
-that decides whether the resulting speedups are real.
+An agent that ports CUDA kernels to AMD HIP and tunes them, paired with an
+independent referee that re-times every candidate and reports how much
+GPU kernel time it actually saves.
 
 ---
 
-## The problem: a speedup claim is a claim about measurement
+## The problem: proving a kernel is faster is harder than making it faster
 
-decuda's agent proposes faster HIP kernels. An independent referee decides
-whether each claimed speedup is real, using 12 checks it never shares with the
-agent.
+decuda's agent can generate a HIP kernel that runs correctly and appears faster than the baseline. But that alone is not enough.
 
-That separation earned itself immediately. Early in development the referee
-accepted a candidate at 75.69x, 8.6 sigma, every correctness check green. An
-external profiler put the real figure near 1.75x — the baseline was being timed
-differently from the candidate, so the reference looked 41x slower than it was.
+To prove an optimization actually worked, the baseline and candidate have to be measured under the same conditions. A difference in synchronization, warmup, dispatch overhead, iteration count, or timer placement can create an improvement that exists only in the benchmark.
 
-Four such asymmetries turned up before the numbers stabilised. Every one made the
-baseline look slow; every one was found by an independent profiler rather than by
-the referee itself. The final verified result is 1.13x, confirmed at 1.28x by
-`rocprofv3`.
+We hit exactly that problem during development.
+
+One candidate passed every correctness check and was reported as 75.69x faster with an 8.6 sigma margin. The result looked exceptionally strong. Then rocprofv3 measured the kernels independently and showed an improvement closer to 1.75x.
+
+The candidate had not suddenly become slower. The benchmark was wrong.
+
+The baseline and candidate were taking different timing paths, making the baseline appear roughly 41x slower than it really was.
+
+That was not an isolated bug. Four separate measurement asymmetries appeared while building the system. Each one made the generated kernel look better than it actually was, and each forced us to tighten the referee and measurement harness.
 
 | Stage                       | Reported           | After external verification     |
 | --------------------------- | ------------------ | ------------------------------- |
 | Process wall-clock timing   | nothing could pass | measuring setup, not the kernel |
-| After `hipEvent` timing     | 75.69x             | ~1.75x                          |
+| After `hipEvent` timing     | 75.69x             | 1.75x                           |
 | After baseline warmup fix   | 1.84x              | inflated by dispatch asymmetry  |
 | After matching amortization | **1.13x**          | **1.28x**                       |
 
-The final number is smaller than every number before it. That is the system
-working.
+The final number is much smaller than the first one, but it is also much more valuable: we can defend it.
+
+decuda is therefore not just trying to generate faster kernels. It is trying to determine whether the generated kernel is actually faster, under a comparison that treats the baseline and candidate identically.
+
+The shrinking number is not the system failing. It is the measurement becoming trustworthy.
 
 ---
 
@@ -130,7 +134,7 @@ external profiler rather than by the referee.
 
 **1. Wall time instead of kernel time.** The harness timed the whole process with
 `perf_counter` — HIP init, `hipMalloc`, generating a million random floats, the
-host reference loop. That is ~183 ms wrapped around a kernel that runs in
+host reference loop. That is 183 ms wrapped around a kernel that runs in
 microseconds. A genuine 2x kernel improvement moved wall time by roughly 0.005%,
 far under the noise floor. Acceptance was arithmetically impossible, not merely
 unachieved. Fixed by bracketing the launch with `hipEventRecord` /
@@ -141,7 +145,7 @@ and code-object setup. The candidate's internal warmup had already paid it. Fixe
 with a discarded warmup launch before the timed region. This is the one that
 produced the fake 75x.
 
-**3. Cold dispatch queue.** Even with a warmup, ~1.8 µs of dispatch latency sat
+**3. Cold dispatch queue.** Even with a warmup, 1.8 µs of dispatch latency sat
 inside the baseline's event bracket that the candidate did not pay.
 
 **4. Unequal amortization.** The candidate — on its own initiative, as good
@@ -274,4 +278,4 @@ still parse against later versions.
 
 ---
 
-Built for the micro1 Agentic Workflows Hackathon, August 2026.
+Built for the micro1 Frontier Engineering Challenge 2026, August 2026.
